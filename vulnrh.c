@@ -35,33 +35,22 @@ hnput(unsigned char *dst, uint32_t src, size_t n){
 	for(i=0; n--; i++)
 		dst[i] = (src >> (n*8)) & 0xff;
 }
-uint32_t
-nhput(unsigned char *src, size_t n){
-	unsigned int i;
-	uint32_t dst;
-	for(i=0; n--; i++)
-		dst += src[i] << (n*8);
-	return dst;
+uint16_t
+nhgets(unsigned char c[2]){
+	return ((c[0]<<8) + c[1]) & 0xffff;
 }
-
+uint32_t
+nhgetl(unsigned char c[4]){
+	return (nhgets(c)<<16)+nhgets(c+2);
+}
 void
 segdump(Packet *p) {
 	char buf[130];
 	memcpy(buf, p, sizeof(buf));
 	uint8_t c = (uint8_t) *p->code;
-	uint32_t l = nhput(p->len, 2);
+	uint16_t l = nhgets(p->len);
 	/* cast to (void *) to avoid warnings */
-	printf("%p\n[c: 0x%x][l: 0x%x][m: %s]\n", 
-		(void *)p, c, l, p->msg);
-}
-void
-segdump2(Packet *p) {
-	char buf[130];
-	memcpy(buf, p, sizeof(buf));
-	uint8_t c = (uint8_t) *p->code;
-	uint32_t l = nhput(p->len, 2);
-	/* cast to (void *) to avoid warnings */
-	printf("%p\n[c: 0x%x][l: 0x%x][m: %s]\n", 
+	printf("%p\n[c: 0x%hx][l: 0x%hx][m: %s]\n", 
 		(void *)p, c, l, p->msg);
 }
 
@@ -81,6 +70,13 @@ dec(char *key, char *cbuff);
 void
 senddat(char *buffer, size_t blen);
 
+enum {
+	Error	= 1,
+	Message = 2,
+	Crypt	= 4,
+	Decrypt = 5,
+};
+
 void
 run(int sock) {
 	unsigned char buf[128];
@@ -90,18 +86,21 @@ run(int sock) {
 	/* read the data */
 	memset(&p, 0, sizeof(p));
 	puts("---");
-	read(sock, buf, 127);
-	memcpy(&p, buf, buf[2]);
+	read(sock, buf, 128);
+	memcpy(&p, buf, nhgets(buf[1]));
 
-	segdump(&p);
-	
-	/* set some data */
-	memset(&p, 0, sizeof(p));
-	hnput(p.code, 0x41, 1);
-	hnput(p.len, 0x4243, 2);
-	char *str="test";
-	memcpy(p.msg, str, 4);
-	write(sock, &p, 8);
+	switch(buf[1]) {
+	case Error:
+		printf("message with ERROR");
+		return;
+	case Message:
+	       printf("msg: %s\n", p.msg);
+	case Crypt:
+	       encmsg(p.msg);
+	case Decrypt:
+	       decmsg(p.msg);
+	Default:
+	       return;
 }
 
 int
@@ -110,6 +109,8 @@ main(int argc, char* argv[]) {
 	struct sockaddr_in saddr;
 	int sport = 4545;
 	
+	signal(SIGTERM, LEAVE);
+
 	lsock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
 	CHK_ERR(lsock, "socket");
 
@@ -150,7 +151,7 @@ main(int argc, char* argv[]) {
 			close(nsock);
 		}
 	}
-//LEAVE:
+LEAVE:
 	puts("closing...\n");
 	close(nsock);
 	return 0;
