@@ -91,7 +91,6 @@ run(int sock) {
 	memset(&p, 0, sizeof(p));
 	puts("---");
 	read(sock, buf, 127);
-	printf("dump: %s", buf);
 	memcpy(&p, buf, buf[2]);
 
 	segdump(&p);
