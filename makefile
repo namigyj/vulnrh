@@ -13,7 +13,7 @@ options:
 	@echo "LDFLAGS = $(VLFLAGS)"
 	@echo "CC      = $(CC)"
 
-vulnrh.o : vulnrh.c
+vulnrh.o: vulnrh.c
 
 vulnrh: $(OBJ) 
 	$(CC) $(VCFLAGS) -o $@ $(VLFLAGS) $^
