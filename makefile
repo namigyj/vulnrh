@@ -31,4 +31,4 @@ run: all
 testclient.o: testclient.c
 
 client: testclient.o
-	$(CC) $(CFLAGS) -o $@ testclient.c
+	$(CC) -o $@ testclient.c
