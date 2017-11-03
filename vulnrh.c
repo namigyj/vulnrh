@@ -12,19 +12,29 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <string.h>
+#include <signal.h>
 
 #define CHK_ERR(err,s) if ((err)==1) { puts("ERROR "); perror(s); exit(1); }
 #define CHK_NULL(x) if ((x) == NULL) exit(1);
 
 
-typedef struct packet {
+typedef struct segment {
 	unsigned char code [1];
 	unsigned char len  [2];
 	unsigned char msg  [128];
-} Packet;
+} Segment;
+
+enum {
+	Error	= 1,
+	Message = 2,
+	Messagd = 3,
+	Crypt	= 4,
+	Cryptd  = 5,
+	Decrypt = 6,
+	Decryptd= 7,
+};
 
 /* GLOBALS */
-Packet p;
 
 /* Debug */
 void
@@ -44,14 +54,14 @@ nhgetl(unsigned char c[4]){
 	return (nhgets(c)<<16)+nhgets(c+2);
 }
 void
-segdump(Packet *p) {
+segdump(Segment *s) {
 	char buf[130];
-	memcpy(buf, p, sizeof(buf));
-	uint8_t c = (uint8_t) *p->code;
-	uint16_t l = nhgets(p->len);
+	memcpy(buf, s, sizeof(buf));
+	uint8_t c = (uint8_t) *s->code;
+	uint16_t l = nhgets(s->len);
 	/* cast to (void *) to avoid warnings */
 	printf("%p\n[c: 0x%hx][l: 0x%hx][m: %s]\n", 
-		(void *)p, c, l, p->msg);
+		(void *)s, c, l, s->msg);
 }
 
 
@@ -61,55 +71,84 @@ makekey(void);
 int
 getkey(char *key);
 
-char *
-enc(char *key, char *mbuff);
+Segment *
+encmsg(char *ptxt, size_t size){
+	char ctxt[size+4];
+	Segment *rseg;
+	printf("sizeof(Segment) = %d", sizeof(Segment));
+	memset(rseg, 0, sizeof(Segment));
+	
+	memcpy(ctxt, ptxt, size);
+	strcpy(&ctxt[size], "enc");
+	printf("new text : %s\n", ctxt);
+	rseg->code[0] = (unsigned char) Cryptd;
+	/* replace size */
+	hnput(rseg->len, size+3, 2);
+	memcpy(rseg->msg, ctxt, size+4);
+	hnput(rseg->code, Cryptd, 1);
+	return rseg;
+}
 
 char *
-dec(char *key, char *cbuff);
+decmsg(char *cbuff) {
+	return cbuff;
+}
 
 void
-senddat(char *buffer, size_t blen);
-
-enum {
-	Error	= 1,
-	Message = 2,
-	Crypt	= 4,
-	Decrypt = 5,
-};
+segsend(int sock, Segment *s, size_t ss) {
+	write(sock, s, ss);
+}
 
 void
 run(int sock) {
 	unsigned char buf[128];
+	size_t dlen, segsize;
 	int err = write(sock, "hello", strlen("hello"));
-	CHK_ERR(err, "Hello packet");
+	CHK_ERR(err, "ERROR: Hello packet");
+	
+	Segment seg;
+	Segment *rseg;
 
 	/* read the data */
-	memset(&p, 0, sizeof(p));
+	memset(&seg, 0, sizeof(seg));
 	puts("---");
 	read(sock, buf, 128);
-	memcpy(&p, buf, nhgets(buf[1]));
+	dlen = nhgets(buf+1);
+	segsize = dlen+4;
+	memcpy(&seg, buf, segsize);
+	segdump(&seg);
 
-	switch(buf[1]) {
+	switch(buf[0]) {
 	case Error:
-		printf("message with ERROR");
+		printf("message with ERROR\n");
 		return;
 	case Message:
-	       printf("msg: %s\n", p.msg);
+		printf("msg: %s\n", seg.msg);
+		return;
 	case Crypt:
-	       encmsg(p.msg);
+		printf("encrypting\n");
+		rseg = encmsg(seg.msg, dlen);
+		err = write(sock, rseg, sizeof(seg));
+		CHK_ERR(err, "enc: error while writing to sock");
+		break;
 	case Decrypt:
-	       decmsg(p.msg);
+		printf("decrypting\n");
+		decmsg(seg.msg);
+		write(sock, &seg, sizeof(seg));
+		break;
 	Default:
-	       return;
-}
+		printf("defaults: %hhx\n", buf[0]);
+		return;
+	}
 
+}
 int
 main(int argc, char* argv[]) {
 	int lsock, nsock; /* listen socket and new socket for client */
 	struct sockaddr_in saddr;
 	int sport = 4545;
 	
-	signal(SIGTERM, LEAVE);
+	signal(SIGTERM, exit);
 
 	lsock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
 	CHK_ERR(lsock, "socket");
@@ -151,7 +190,6 @@ main(int argc, char* argv[]) {
 			close(nsock);
 		}
 	}
-LEAVE:
 	puts("closing...\n");
 	close(nsock);
 	return 0;
