@@ -7,12 +7,15 @@
 #include <openssl/ssl.h>
 #include <openssl/bio.h>
 #include <openssl/err.h>
+#include <openssl/aes.h>
 
 #include <stdlib.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <string.h>
 #include <signal.h>
+
+#define KEYLEN 16
 
 #define CHK_ERR(err,s) if ((err)==1) { puts("ERROR "); perror(s); exit(1); }
 #define CHK_NULL(x) if ((x) == NULL) exit(1);
@@ -34,9 +37,21 @@ enum {
 	Decryptd= 7,
 };
 
-/* GLOBALS */
+typedef struct keymap {
+	uint32_t ip;
+	unsigned char key[KEYLEN];
+} Keymap;
 
-/* Debug */
+/* GLOBALS */
+Keymap **km = NULL;
+size_t nkm;
+
+static const unsigned char masterkey[] = {
+	0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 
+	0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F
+};
+
+
 void
 hnput(unsigned char *dst, uint32_t src, size_t n){
 	unsigned int i;
@@ -53,6 +68,7 @@ uint32_t
 nhgetl(unsigned char c[4]){
 	return (nhgets(c)<<16)+nhgets(c+2);
 }
+/* Debug */
 void
 segdump(Segment *s) {
 	char buf[130];
@@ -60,38 +76,90 @@ segdump(Segment *s) {
 	uint8_t c = (uint8_t) *s->code;
 	uint16_t l = nhgets(s->len);
 	/* cast to (void *) to avoid warnings */
-	printf("%p\n[c: 0x%hx][l: 0x%hx][m: %s]\n", 
+	printf("segdump : %p [c: 0x%hx][l: 0x%hx][m: %s]\n", 
 		(void *)s, c, l, s->msg);
 }
 
 
-char *
-makekey(void);
+int
+addkey(uint32_t ipaddr) {
+	if (nkm == 0)
+		km = malloc(sizeof(Keymap *));
+	else
+		km = realloc(km, (nkm+1)*sizeof(Keymap *));
+	
+	km[nkm] = (Keymap *) malloc(sizeof(*km)); 
+//dbg	printf("km=%p\n",(void *)km, (void *)km+(sizeof (km[0])));
+	
+	km[nkm]->ip = ipaddr;
+	hnput(km[nkm]->key, ipaddr, 4);
+	memcpy(km[nkm]->key, masterkey, KEYLEN);
+
+	nkm++;
+	return 0;
+}
 
 int
-getkey(char *key);
+loadkeys(void) {
+	/* todo : loadkeys from file */
+	/* todo : secure file
+	 * note : it's not possible, the system is broken tbh
+	 */
+	return 0;
+}
+
+unsigned char *
+getkey(uint32_t ipaddr) {
+	unsigned int i;
+
+	if ( km == NULL) {
+		if(loadkeys() == 0) return 0;
+	}
+	for(i=0; i<nkm; i++)
+		if(km[i]->ip == ipaddr) return km[i]->key;
+
+	return 0;
+}
 
 Segment *
-encmsg(char *ptxt, size_t size){
-	char ctxt[size+4];
+encmsg(unsigned char *ptxt, size_t tsize){
+	printf("debug: encrypting %s\n", ptxt);
+
+	AES_KEY enkey;
+	unsigned char ctxt[AES_BLOCK_SIZE];
 	Segment *rseg;
-	printf("sizeof(Segment) = %d", sizeof(Segment));
-	memset(rseg, 0, sizeof(Segment));
-	
-	memcpy(ctxt, ptxt, size);
-	strcpy(&ctxt[size], "enc");
-	printf("new text : %s\n", ctxt);
-	rseg->code[0] = (unsigned char) Cryptd;
-	/* replace size */
-	hnput(rseg->len, size+3, 2);
-	memcpy(rseg->msg, ctxt, size+4);
+
+        rseg = calloc(1, sizeof(*rseg));
+	AES_set_encrypt_key(masterkey, 128, &enkey);
+
+	AES_encrypt(ptxt, (unsigned char *) &ctxt, &enkey);
+	/* setup segment */
+	hnput(rseg->len, AES_BLOCK_SIZE, 2);
+	memcpy(rseg->msg, &ctxt, AES_BLOCK_SIZE);
 	hnput(rseg->code, Cryptd, 1);
 	return rseg;
 }
 
-char *
-decmsg(char *cbuff) {
-	return cbuff;
+Segment *
+decmsg(unsigned char *ctxt, size_t tsize) {
+	printf("debug: decrypting ");
+	
+	for(int i=0; i < tsize; i++) printf("%hhx", ctxt[i]);
+	printf("\n");
+
+	AES_KEY dekey;
+	unsigned char ptxt[AES_BLOCK_SIZE];
+	Segment *rseg;
+        
+	rseg = calloc(1, sizeof(*rseg));
+	AES_set_decrypt_key(masterkey, 128, &dekey);
+
+	AES_decrypt(ctxt, (unsigned char *) &ptxt, &dekey);
+
+	hnput(rseg->len, AES_BLOCK_SIZE, 2);
+	memcpy(rseg->msg, &ptxt, AES_BLOCK_SIZE);
+	hnput(rseg->code, Decryptd, 1);
+	return rseg;
 }
 
 void
@@ -100,22 +168,52 @@ segsend(int sock, Segment *s, size_t ss) {
 }
 
 void
+freekm(void) {
+	for(;nkm--;) free(km[nkm]);
+}
+void
+sighandler(int ihavenofuckingideawhattodowiththis) {
+	printf("signal called");
+	freekm();
+	_exit(0);
+}
+
+Segment seg;
+void
+test(void) {
+/*
+	addkey(0x42424242);
+	addkey(0x43434343);
+	printf("[0]:%d,%s\n[1]:%d,%s\n", 
+		km[0]->ip, km[0]->key, km[1]->ip, km[1]->key);
+	freekm();
+*/
+	memset(&seg, 0, sizeof(seg));
+	hnput(seg.code, Crypt, 1);
+	hnput(seg.len, AES_BLOCK_SIZE, 2);
+	strcpy(seg.msg, "this is a test\0\0");
+}
+
+void
 run(int sock) {
+	int err;
 	unsigned char buf[128];
 	size_t dlen, segsize;
-	int err = write(sock, "hello", strlen("hello"));
+	
+	err = write(sock, "hello", strlen("hello"));
 	CHK_ERR(err, "ERROR: Hello packet");
 	
-	Segment seg;
+//	Segment seg;
 	Segment *rseg;
-
+	int n = 2;
+	while(n--) {
 	/* read the data */
 	memset(&seg, 0, sizeof(seg));
 	puts("---");
 	read(sock, buf, 128);
 	dlen = nhgets(buf+1);
-	segsize = dlen+4;
-	memcpy(&seg, buf, segsize);
+	memcpy(&seg, buf, dlen+3);
+	printf("received : ");
 	segdump(&seg);
 
 	switch(buf[0]) {
@@ -126,29 +224,35 @@ run(int sock) {
 		printf("msg: %s\n", seg.msg);
 		return;
 	case Crypt:
-		printf("encrypting\n");
 		rseg = encmsg(seg.msg, dlen);
-		err = write(sock, rseg, sizeof(seg));
+		segdump(rseg);
+		err = write(sock, rseg, nhgets(rseg->len)+3);
 		CHK_ERR(err, "enc: error while writing to sock");
+		free(rseg);
 		break;
 	case Decrypt:
-		printf("decrypting\n");
-		decmsg(seg.msg);
-		write(sock, &seg, sizeof(seg));
+		rseg = decmsg(seg.msg, dlen);
+		segdump(rseg);
+		write(sock, rseg, nhgets(rseg->len)+3);
+		free(rseg);
 		break;
-	Default:
+	default:
 		printf("defaults: %hhx\n", buf[0]);
 		return;
 	}
-
+	}
 }
+
 int
 main(int argc, char* argv[]) {
 	int lsock, nsock; /* listen socket and new socket for client */
 	struct sockaddr_in saddr;
 	int sport = 4545;
-	
-	signal(SIGTERM, exit);
+
+//	run(123);
+
+	signal(SIGINT, sighandler);
+	signal(SIGTERM, sighandler);
 
 	lsock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
 	CHK_ERR(lsock, "socket");
@@ -183,7 +287,6 @@ main(int argc, char* argv[]) {
 		if(pid == 0) {
 			close(lsock);
 			run(nsock);
-			//interactive(nsock);
 			puts("fork: exiting normally...");
 			exit(0);
 		} else {
@@ -191,6 +294,7 @@ main(int argc, char* argv[]) {
 		}
 	}
 	puts("closing...\n");
+	freekm();
 	close(nsock);
 	return 0;
 }
