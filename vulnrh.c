@@ -20,6 +20,7 @@
 #define CHK_ERR(err,s) if ((err)==1) { puts("ERROR "); perror(s); exit(1); }
 #define CHK_NULL(x) if ((x) == NULL) exit(1);
 
+void SIGhandler(int);
 
 typedef struct segment {
 	unsigned char code [1];
@@ -45,6 +46,7 @@ typedef struct keymap {
 /* GLOBALS */
 Keymap **km = NULL;
 size_t nkm;
+//int nsock;
 
 static const unsigned char masterkey[] = {
 	0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 
@@ -76,12 +78,19 @@ segdump(Segment *s) {
 	uint8_t c = (uint8_t) *s->code;
 	uint16_t l = nhgets(s->len);
 	/* cast to (void *) to avoid warnings */
-	printf("segdump : %p [c: 0x%hx][l: 0x%hx][m: %s]\n", 
-		(void *)s, c, l, s->msg);
+	printf("segdump : %p [c: 0x%hx][l: 0x%hx][m: ", 
+		(void *)s, c, l);
+	if ( c == Cryptd || c == Decrypt ) { 
+		for(int i=0; i<l; i++) printf("%hhx", s->msg[i]);
+	} else {
+		printf("%s", s->msg);
+	}
+	printf("]\n");
+	
 }
 
 
-int
+unsigned char *
 addkey(uint32_t ipaddr) {
 	if (nkm == 0)
 		km = malloc(sizeof(Keymap *));
@@ -96,15 +105,14 @@ addkey(uint32_t ipaddr) {
 	memcpy(km[nkm]->key, masterkey, KEYLEN);
 
 	nkm++;
-	return 0;
+	return km[nkm]->key;
 }
 
+/* todo : loadkeys from file
+ *        secure file (it's useless, the system is broken tbh)
+ */
 int
 loadkeys(void) {
-	/* todo : loadkeys from file */
-	/* todo : secure file
-	 * note : it's not possible, the system is broken tbh
-	 */
 	return 0;
 }
 
@@ -121,32 +129,39 @@ getkey(uint32_t ipaddr) {
 	return 0;
 }
 
+/* todo : check errors
+ *        use something better than AES_encrypt
+ *        don't use ECB
+ */
 Segment *
-encmsg(unsigned char *ptxt, size_t tsize){
-	printf("debug: encrypting %s\n", ptxt);
-
+encmsg(unsigned char *ptxt, size_t tsize, uint32_t ipaddr){
 	AES_KEY enkey;
 	unsigned char ctxt[AES_BLOCK_SIZE];
+	unsigned char *lkey;
 	Segment *rseg;
 
-        rseg = calloc(1, sizeof(*rseg));
+	/* the error handling here is probably very useless */
+	if((lkey = getkey(ipaddr)) == 0){ 
+		if((lkey = addkey(ipaddr)) == NULL)
+			fprintf(stderr, "ERROR: addkey failed\n");
+	}
+	rseg = calloc(1, sizeof(*rseg));
 	AES_set_encrypt_key(masterkey, 128, &enkey);
 
 	AES_encrypt(ptxt, (unsigned char *) &ctxt, &enkey);
-	/* setup segment */
+	/* make the segment */
 	hnput(rseg->len, AES_BLOCK_SIZE, 2);
 	memcpy(rseg->msg, &ctxt, AES_BLOCK_SIZE);
 	hnput(rseg->code, Cryptd, 1);
 	return rseg;
 }
 
+/* todo : check errors
+ *        Read a textbook to know how to decrypt in CBC mode on a HSM
+ *          I mean, what if the data isn't sent in the right order ?
+ */
 Segment *
-decmsg(unsigned char *ctxt, size_t tsize) {
-	printf("debug: decrypting ");
-	
-	for(int i=0; i < tsize; i++) printf("%hhx", ctxt[i]);
-	printf("\n");
-
+decmsg(unsigned char *ctxt, size_t tsize, uint32_t ipaddr) {
 	AES_KEY dekey;
 	unsigned char ptxt[AES_BLOCK_SIZE];
 	Segment *rseg;
@@ -156,24 +171,29 @@ decmsg(unsigned char *ctxt, size_t tsize) {
 
 	AES_decrypt(ctxt, (unsigned char *) &ptxt, &dekey);
 
+	/* make the segment */
 	hnput(rseg->len, AES_BLOCK_SIZE, 2);
 	memcpy(rseg->msg, &ptxt, AES_BLOCK_SIZE);
 	hnput(rseg->code, Decryptd, 1);
 	return rseg;
 }
 
-void
-segsend(int sock, Segment *s, size_t ss) {
-	write(sock, s, ss);
+ssize_t
+segsend(int fd, void *buf, size_t count) {
+	Segment *sseg = buf;
+	printf("debug: sent : "); segdump(sseg);
+	return write(fd, sseg, nhgets(sseg->len)+3);
 }
 
 void
 freekm(void) {
-	for(;nkm--;) free(km[nkm]);
+	while(nkm--) free(km[nkm]);
 }
+
+/* todo : read more on this. finally got it working but feels like cheaphack */
 void
-sighandler(int ihavenofuckingideawhattodowiththis) {
-	printf("signal called");
+SIGhandler(int ihavenofuckingideawhattodowiththis) {
+//	close(nsock);
 	freekm();
 	_exit(0);
 }
@@ -191,55 +211,57 @@ test(void) {
 	memset(&seg, 0, sizeof(seg));
 	hnput(seg.code, Crypt, 1);
 	hnput(seg.len, AES_BLOCK_SIZE, 2);
-	strcpy(seg.msg, "this is a test\0\0");
+	strcpy((char *)seg.msg, "this is a test\0\0");
 }
 
 void
-run(int sock) {
+run(int sock, uint32_t ipaddr) {
 	int err;
 	unsigned char buf[128];
-	size_t dlen, segsize;
+	size_t dlen;
 	
 	err = write(sock, "hello", strlen("hello"));
 	CHK_ERR(err, "ERROR: Hello packet");
-	
-//	Segment seg;
+
+	/* keeping it a global until test func is no more needed */
+//dbg	Segment seg;
 	Segment *rseg;
+
+	puts("---");
 	int n = 2;
 	while(n--) {
-	/* read the data */
+
+		/* read the data */
 	memset(&seg, 0, sizeof(seg));
-	puts("---");
 	read(sock, buf, 128);
 	dlen = nhgets(buf+1);
 	memcpy(&seg, buf, dlen+3);
-	printf("received : ");
-	segdump(&seg);
+	printf("debug: received : "); segdump(&seg);
 
 	switch(buf[0]) {
 	case Error:
+		/* in case the server has to handle errors on client */
 		printf("message with ERROR\n");
 		return;
 	case Message:
+		/* in case control messages need to be sent/received */
 		printf("msg: %s\n", seg.msg);
 		return;
 	case Crypt:
-		rseg = encmsg(seg.msg, dlen);
-		segdump(rseg);
-		err = write(sock, rseg, nhgets(rseg->len)+3);
+		rseg = encmsg(seg.msg, dlen, ipaddr);
+		err = segsend(sock, rseg, nhgets(rseg->len)+3);
 		CHK_ERR(err, "enc: error while writing to sock");
-		free(rseg);
 		break;
 	case Decrypt:
-		rseg = decmsg(seg.msg, dlen);
-		segdump(rseg);
-		write(sock, rseg, nhgets(rseg->len)+3);
-		free(rseg);
+		rseg = decmsg(seg.msg, dlen, ipaddr);
+		err = segsend(sock, rseg, nhgets(rseg->len)+3);
+		CHK_ERR(err, "dec: error while writing to sock");
 		break;
 	default:
-		printf("defaults: %hhx\n", buf[0]);
+		printf("debug: default called, code:%hhx\n", buf[0]);
 		return;
 	}
+	free(rseg);
 	}
 }
 
@@ -249,10 +271,6 @@ main(int argc, char* argv[]) {
 	struct sockaddr_in saddr;
 	int sport = 4545;
 
-//	run(123);
-
-	signal(SIGINT, sighandler);
-	signal(SIGTERM, sighandler);
 
 	lsock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
 	CHK_ERR(lsock, "socket");
@@ -274,19 +292,22 @@ main(int argc, char* argv[]) {
 	while(1) {
 		char caddr_s[INET_ADDRSTRLEN];
 		int pid;
-		
+
+		signal(SIGINT, SIGhandler);
+//		singal(SIGTERM, SIGhandler);
+
 		nsock = accept(lsock, (struct sockaddr*) &caddr, &caddrlen);
 		CHK_ERR(nsock, "ERROR on accepting new socket");
-		
+
 		inet_ntop(AF_INET, &(caddr.sin_addr), caddr_s, INET_ADDRSTRLEN);
-		printf("Connection from %s, port %d\n", 
-				caddr_s, ntohs(caddr.sin_port));
+		printf("Connection from %s(%d), port %d\n", 
+				caddr_s, caddr.sin_addr.s_addr, ntohs(caddr.sin_port));
 
 		pid = fork();
 		CHK_ERR(pid, "ERROR on forking");
 		if(pid == 0) {
 			close(lsock);
-			run(nsock);
+			run(nsock, caddr.sin_addr.s_addr);
 			puts("fork: exiting normally...");
 			exit(0);
 		} else {
@@ -298,3 +319,4 @@ main(int argc, char* argv[]) {
 	close(nsock);
 	return 0;
 }
+

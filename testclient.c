@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <unistd.h>
 
 #define CHK_ERR(err,s) if (err==-1) { error(s) }
 #define error(s) { perror(s); exit(1);}
@@ -92,7 +93,7 @@ main(int argc, char *argv[]) {
 	CHK_ERR(err, "ERROR socket: reading from socket");
 	if(buffer[0] == Cryptd) printf("c: ");
 	for(int i=0;i<16;i++) printf("%hhx", buffer[i+3]);
-	printf(" ]\n", buffer);
+	printf(" ]\n");
 
 	/* sending ciphertext */
 	printf("<=[ ");
