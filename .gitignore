@@ -1,3 +1,5 @@
 *.o
 vulnrh
 client
+peda*
+?gdb*
