@@ -41,18 +41,18 @@ main(int argc, char *argv[]) {
 
 	if ((argc == 2) && !(strcmp(argv[1], "test"))) {
 		test();
-	} else if (argc != 3) {
-		fprintf(stderr, "usage %s hostname port\n", argv[0]);
+	} else if (argc < 3 ) {
+		fprintf(stderr, "usage %s hostname port [text]\n", argv[0]);
 		exit(0);
 	}
-	
+
 	portno = atoi(argv[2]);
 	sockfd = socket(AF_INET, SOCK_STREAM, 0);
 	CHK_ERR(sockfd, "ERROR socket: opening socket");
 	shost = gethostbyname(argv[1]);
 	if (shost == NULL)
 		error("ERROR hostname: no such host");
-	
+
 	memset(&saddr, 0, sizeof(saddr));
 	saddr.sin_family = AF_INET;
 	/*bcopy((char *)shost->h_addr,
@@ -62,7 +62,7 @@ main(int argc, char *argv[]) {
 	memcpy((char *)shost->h_addr_list[0], 
 		&saddr.sin_addr.s_addr, 
 		shost->h_length);
-	
+
 	saddr.sin_port = htons(portno);
 	err = connect(sockfd, (struct sockaddr*) &saddr, sizeof(saddr));
 	CHK_ERR(err, "ERROR socket: connecting");
@@ -73,29 +73,44 @@ main(int argc, char *argv[]) {
 	CHK_ERR(err, "ERROR read: reading from socket");
 	printf("%s ]\n", buffer);
 /*}}}*/
-	
+
 	/* sending plaintext */
-	char *msg = "plaintext";
+	char *msg = argv[3];
 	size_t dlen = strlen(msg);
+	if (dlen > 15 ) { dlen = 15; msg[15]='\0'; }
 	buffer[0] = Crypt;
-	buffer[1] = 0x0; buffer[2] = (unsigned char) dlen;
+	buffer[1] = 0x0; buffer[2] = 0x10;
 	strcpy(&buffer[3], msg);
 	err = write(sockfd, buffer, dlen+4);
 	CHK_ERR(err, "ERROR write: writing plaintext to socket");
 	printf("<=[ %s ]\n", msg);
 
 	/* response */
-	printf("=>[ ");
+	printf("=>[");
 	memset(buffer, 0, 256);
 	err = read(sockfd, buffer, 255);
 	CHK_ERR(err, "ERROR socket: reading from socket");
-	printf("%s ]\n", buffer);
+	if(buffer[0] == Cryptd) printf("c: ");
+	for(int i=0;i<16;i++) printf("%hhx", buffer[i+3]);
+	printf(" ]\n", buffer);
 
 	/* sending ciphertext */
+	printf("<=[ ");
+	buffer[0] = Decrypt;
+	buffer[1] = 0x0; buffer[2] = 0x10;
+	err =  write(sockfd, buffer, 16+4);
+	CHK_ERR(err, "ERROR socket: writing cipher to socket");
+	for(int i=0;i<16;i++) printf("%hhx", buffer[i+3]);
+	printf(" ]\n");
 
 	/* response */
-	
-	
+	printf("=>[");
+	memset(buffer, 0, 256);
+	err = read(sockfd, buffer, 255);
+	CHK_ERR(err, "ERROR socket: reading from socket");
+	if(buffer[0] == Decryptd) printf("d: ");
+	printf("%s ]\n", buffer+3);
+
 /*FIN{{{*/
 	puts("cleaning up");
 	close(sockfd);
