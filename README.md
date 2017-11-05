@@ -15,3 +15,4 @@ I plan on gradually securing it though, as I learn more about cryptosystems.
     * use randomly generated key
     * put the keys in encrypted file (?? is this useful. should I put the key of it in another file ?)
     * use SSL
+* read a book
