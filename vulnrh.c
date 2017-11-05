@@ -46,7 +46,7 @@ typedef struct keymap {
 /* GLOBALS */
 Keymap **km = NULL;
 size_t nkm;
-//int nsock;
+int nsock;
 
 static const unsigned char masterkey[] = {
 	0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 
@@ -105,7 +105,7 @@ addkey(uint32_t ipaddr) {
 	memcpy(km[nkm]->key, masterkey, KEYLEN);
 
 	nkm++;
-	return km[nkm]->key;
+	return km[nkm-1]->key;
 }
 
 /* todo : loadkeys from file
@@ -129,6 +129,23 @@ getkey(uint32_t ipaddr) {
 	return 0;
 }
 
+/* todo : make it cleaner by adding a code inside the data
+ *        but not as ascii to avoid parsing
+ */
+Segment *
+mkerr(const void *errmsg) {
+	Segment *rseg;
+	size_t errlen;
+
+	errlen = strlen(errmsg) +1;
+	rseg = calloc(1, sizeof(*rseg));
+	hnput(rseg->code, Error, 1);
+	hnput(rseg->len, errlen, 2);
+	memcpy(rseg->msg, errmsg, errlen);
+
+	return rseg;
+}
+
 /* todo : check errors
  *        use something better than AES_encrypt
  *        don't use ECB
@@ -140,13 +157,14 @@ encmsg(unsigned char *ptxt, size_t tsize, uint32_t ipaddr){
 	unsigned char *lkey;
 	Segment *rseg;
 
-	/* the error handling here is probably very useless */
 	if((lkey = getkey(ipaddr)) == 0){ 
+	/* the error handling here is probably very useless */
 		if((lkey = addkey(ipaddr)) == NULL)
 			fprintf(stderr, "ERROR: addkey failed\n");
 	}
+
 	rseg = calloc(1, sizeof(*rseg));
-	AES_set_encrypt_key(masterkey, 128, &enkey);
+	AES_set_encrypt_key(lkey, 128, &enkey);
 
 	AES_encrypt(ptxt, (unsigned char *) &ctxt, &enkey);
 	/* make the segment */
@@ -164,10 +182,17 @@ Segment *
 decmsg(unsigned char *ctxt, size_t tsize, uint32_t ipaddr) {
 	AES_KEY dekey;
 	unsigned char ptxt[AES_BLOCK_SIZE];
+	unsigned char *lkey;
 	Segment *rseg;
         
+	if((lkey = getkey(ipaddr)) == 0){ 
+	/* the error handling here is probably very useless */
+		if((lkey = addkey(ipaddr)) == NULL)
+			fprintf(stderr, "ERROR: addkey failed\n");
+	}
+
 	rseg = calloc(1, sizeof(*rseg));
-	AES_set_decrypt_key(masterkey, 128, &dekey);
+	AES_set_decrypt_key(lkey, 128, &dekey);
 
 	AES_decrypt(ctxt, (unsigned char *) &ptxt, &dekey);
 
@@ -181,9 +206,10 @@ decmsg(unsigned char *ctxt, size_t tsize, uint32_t ipaddr) {
 ssize_t
 segsend(int fd, void *buf, size_t count) {
 	Segment *sseg = buf;
-	printf("debug: sent : "); segdump(sseg);
+	printf("[debug]sent : "); segdump(sseg);
 	return write(fd, sseg, nhgets(sseg->len)+3);
 }
+
 
 void
 freekm(void) {
@@ -193,7 +219,7 @@ freekm(void) {
 /* todo : read more on this. finally got it working but feels like cheaphack */
 void
 SIGhandler(int ihavenofuckingideawhattodowiththis) {
-//	close(nsock);
+	close(nsock);
 	freekm();
 	_exit(0);
 }
@@ -207,11 +233,15 @@ test(void) {
 	printf("[0]:%d,%s\n[1]:%d,%s\n", 
 		km[0]->ip, km[0]->key, km[1]->ip, km[1]->key);
 	freekm();
-*/
+*//*
 	memset(&seg, 0, sizeof(seg));
 	hnput(seg.code, Crypt, 1);
 	hnput(seg.len, AES_BLOCK_SIZE, 2);
 	strcpy((char *)seg.msg, "this is a test\0\0");
+*/
+	segdump(mkerr("02: testing this error"));
+	exit(0);
+
 }
 
 void
@@ -236,7 +266,7 @@ run(int sock, uint32_t ipaddr) {
 	read(sock, buf, 128);
 	dlen = nhgets(buf+1);
 	memcpy(&seg, buf, dlen+3);
-	printf("debug: received : "); segdump(&seg);
+	printf("[debug]received : "); segdump(&seg);
 
 	switch(buf[0]) {
 	case Error:
@@ -258,7 +288,8 @@ run(int sock, uint32_t ipaddr) {
 		CHK_ERR(err, "dec: error while writing to sock");
 		break;
 	default:
-		printf("debug: default called, code:%hhx\n", buf[0]);
+		printf("[debug]unhandled code:%hhx\n", buf[0]);
+		mkerr("01:request unknown");
 		return;
 	}
 	free(rseg);
@@ -271,6 +302,7 @@ main(int argc, char* argv[]) {
 	struct sockaddr_in saddr;
 	int sport = 4545;
 
+	signal(SIGINT, SIGhandler);
 
 	lsock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
 	CHK_ERR(lsock, "socket");
@@ -293,9 +325,6 @@ main(int argc, char* argv[]) {
 		char caddr_s[INET_ADDRSTRLEN];
 		int pid;
 
-		signal(SIGINT, SIGhandler);
-//		singal(SIGTERM, SIGhandler);
-
 		nsock = accept(lsock, (struct sockaddr*) &caddr, &caddrlen);
 		CHK_ERR(nsock, "ERROR on accepting new socket");
 
@@ -308,7 +337,7 @@ main(int argc, char* argv[]) {
 		if(pid == 0) {
 			close(lsock);
 			run(nsock, caddr.sin_addr.s_addr);
-			puts("fork: exiting normally...");
+			puts("[debug]fork: exiting normally...");
 			exit(0);
 		} else {
 			close(nsock);
