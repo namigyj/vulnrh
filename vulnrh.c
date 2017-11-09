@@ -47,6 +47,7 @@ typedef struct keymap {
 Keymap **km = NULL;
 size_t nkm;
 int nsock;
+FILE *file;
 
 static const unsigned char masterkey[] = {
 	0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 
@@ -83,7 +84,7 @@ segdump(Segment *s) {
 	if ( c == Cryptd || c == Decrypt ) { 
 		for(int i=0; i<l; i++) printf("%hhx", s->msg[i]);
 	} else {
-		printf("%s", s->msg);
+		for(int i=0; i<l; i++) printf("%c", s->msg[i]);
 	}
 	printf("]\n");
 	
@@ -151,22 +152,32 @@ mkerr(const void *errmsg) {
  *        don't use ECB
  */
 Segment *
-encmsg(unsigned char *ptxt, size_t tsize, uint32_t ipaddr){
-	AES_KEY enkey;
-	unsigned char ctxt[AES_BLOCK_SIZE];
+encmsg(unsigned char *ptxt, size_t psize, uint32_t ipaddr){
+	int rounds;
+	unsigned char * ctxt, cp, pp;
 	unsigned char *lkey;
 	Segment *rseg;
+	AES_KEY enkey;
+	
+	rounds = psize / 16;
+	if(rounds % 16 > 0) rounds++;
+	ctxt = calloc(rounds, AES_BLOCK_SIZE);
+	cp = ctxt;
+	pp = ptxt;
 
 	if((lkey = getkey(ipaddr)) == 0){ 
 	/* the error handling here is probably very useless */
 		if((lkey = addkey(ipaddr)) == NULL)
 			fprintf(stderr, "ERROR: addkey failed\n");
 	}
-
-	rseg = calloc(1, sizeof(*rseg));
 	AES_set_encrypt_key(lkey, 128, &enkey);
-
-	AES_encrypt(ptxt, (unsigned char *) &ctxt, &enkey);
+	
+	for(int i=0; rounds--;i+=16) {
+		for(int j=i; j%16<=15; j++) printf("%c", ptxt[j]);
+		AES_encrypt(&ptxt[i], &ctxt[i], &enkey);
+	}
+	
+	rseg = calloc(1, sizeof(*rseg));
 	/* make the segment */
 	hnput(rseg->len, AES_BLOCK_SIZE, 2);
 	memcpy(rseg->msg, &ctxt, AES_BLOCK_SIZE);
@@ -224,7 +235,6 @@ SIGhandler(int ihavenofuckingideawhattodowiththis) {
 	_exit(0);
 }
 
-Segment seg;
 void
 test(void) {
 /*
@@ -254,7 +264,7 @@ run(int sock, uint32_t ipaddr) {
 	CHK_ERR(err, "ERROR: Hello packet");
 
 	/* keeping it a global until test func is no more needed */
-//dbg	Segment seg;
+	Segment seg;
 	Segment *rseg;
 
 	puts("---");
@@ -331,7 +341,8 @@ main(int argc, char* argv[]) {
 		inet_ntop(AF_INET, &(caddr.sin_addr), caddr_s, INET_ADDRSTRLEN);
 		printf("Connection from %s(%d), port %d\n", 
 				caddr_s, caddr.sin_addr.s_addr, ntohs(caddr.sin_port));
-
+		
+		/* what about writing/reading from file atsame time */
 		pid = fork();
 		CHK_ERR(pid, "ERROR on forking");
 		if(pid == 0) {

@@ -25,15 +25,22 @@ enum {
 /*test{{{*/
 void
 test() {
-	char buf[10];
-	buf[0] = 'A'; buf[1] = 'B';
-	strcpy(&buf[2], "test");
-	puts(buf);
-	exit(EXIT_FAILURE);
+	char * string = "0123456789";
+	char * str = string;
+	size_t s = 10;
+	int rn;
+	rn = 10/2;
+	if(10%2 > 0) rn++;
+	while(rn--) {
+		printf("%c%c\n",str[0],str[1]);
+		str += 2;
+	}
+	exit(EXIT_SUCCESS);
 }
 /*}}}*/
 int
 main(int argc, char *argv[]) {
+	//test();
 /*Preambule{{{*/
 	int sockfd, portno, err;
 	struct sockaddr_in saddr;
@@ -78,7 +85,7 @@ main(int argc, char *argv[]) {
 	/* sending plaintext */
 	char *msg = argv[3];
 	size_t dlen = strlen(msg);
-	if (dlen > 15 ) { dlen = 15; msg[15]='\0'; }
+	//if (dlen > 15 ) { dlen = 15; msg[15]='\0'; }
 	buffer[0] = Crypt;
 	buffer[1] = 0x0; buffer[2] = 0x10;
 	strcpy(&buffer[3], msg);
