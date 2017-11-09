@@ -154,16 +154,16 @@ mkerr(const void *errmsg) {
 Segment *
 encmsg(unsigned char *ptxt, size_t psize, uint32_t ipaddr){
 	int rounds;
-	unsigned char * ctxt, cp, pp;
-	unsigned char *lkey;
+	size_t msize;
+	//unsigned char * ctxt;
+	unsigned char *lkey, ctxt;
 	Segment *rseg;
 	AES_KEY enkey;
 	
 	rounds = psize / 16;
 	if(rounds % 16 > 0) rounds++;
 	ctxt = calloc(rounds, AES_BLOCK_SIZE);
-	cp = ctxt;
-	pp = ptxt;
+	msize = rounds * AES_BLOCK_SIZE;
 
 	if((lkey = getkey(ipaddr)) == 0){ 
 	/* the error handling here is probably very useless */
@@ -173,14 +173,14 @@ encmsg(unsigned char *ptxt, size_t psize, uint32_t ipaddr){
 	AES_set_encrypt_key(lkey, 128, &enkey);
 	
 	for(int i=0; rounds--;i+=16) {
-		for(int j=i; j%16<=15; j++) printf("%c", ptxt[j]);
+		for(int j=i; j-i < 16; j++) printf("%c", ptxt[j]);
 		AES_encrypt(&ptxt[i], &ctxt[i], &enkey);
 	}
 	
-	rseg = calloc(1, sizeof(*rseg));
 	/* make the segment */
-	hnput(rseg->len, AES_BLOCK_SIZE, 2);
-	memcpy(rseg->msg, &ctxt, AES_BLOCK_SIZE);
+	rseg = calloc(1, sizeof(*rseg));
+	hnput(rseg->len, msize, 2);
+	memcpy(rseg->msg, &ctxt, msize);
 	hnput(rseg->code, Cryptd, 1);
 	return rseg;
 }
@@ -192,24 +192,31 @@ encmsg(unsigned char *ptxt, size_t psize, uint32_t ipaddr){
 Segment *
 decmsg(unsigned char *ctxt, size_t tsize, uint32_t ipaddr) {
 	AES_KEY dekey;
-	unsigned char ptxt[AES_BLOCK_SIZE];
-	unsigned char *lkey;
+	//unsigned char *ptxt;
+	unsigned char *lkey, ptxt;
 	Segment *rseg;
-        
+
+	rounds = psize /16;
+	if(rounds % 16 > 0) rounds++;
+	ptxt= calloc(rounds, AES_BLOCK_SIZE);
+	msize = rounds*AES_BLOCK_SIZE;
+
 	if((lkey = getkey(ipaddr)) == 0){ 
 	/* the error handling here is probably very useless */
 		if((lkey = addkey(ipaddr)) == NULL)
 			fprintf(stderr, "ERROR: addkey failed\n");
 	}
-
-	rseg = calloc(1, sizeof(*rseg));
 	AES_set_decrypt_key(lkey, 128, &dekey);
 
-	AES_decrypt(ctxt, (unsigned char *) &ptxt, &dekey);
+	for(int i=0; rounds--; i+=16) {
+		AES_decrypt(&ctxt[i], &ptxt[i], &dekey);
+		for(int j=i; j-i < 16; j++) printf("%c", ptxt[j]);
+	}
 
 	/* make the segment */
-	hnput(rseg->len, AES_BLOCK_SIZE, 2);
-	memcpy(rseg->msg, &ptxt, AES_BLOCK_SIZE);
+	rseg = calloc(1, sizeof(*rseg));
+	hnput(rseg->len, msize, 2);
+	memcpy(rseg->msg, &ptxt, msize);
 	hnput(rseg->code, Decryptd, 1);
 	return rseg;
 }
