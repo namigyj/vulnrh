@@ -47,6 +47,7 @@ typedef struct keymap {
 Keymap **km = NULL;
 size_t nkm;
 int nsock;
+FILE *file;
 
 static const unsigned char masterkey[] = {
 	0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 
@@ -83,7 +84,7 @@ segdump(Segment *s) {
 	if ( c == Cryptd || c == Decrypt ) { 
 		for(int i=0; i<l; i++) printf("%hhx", s->msg[i]);
 	} else {
-		printf("%s", s->msg);
+		for(int i=0; i<l; i++) printf("%c", s->msg[i]);
 	}
 	printf("]\n");
 	
@@ -151,25 +152,35 @@ mkerr(const void *errmsg) {
  *        don't use ECB
  */
 Segment *
-encmsg(unsigned char *ptxt, size_t tsize, uint32_t ipaddr){
-	AES_KEY enkey;
-	unsigned char ctxt[AES_BLOCK_SIZE];
-	unsigned char *lkey;
+encmsg(unsigned char *ptxt, size_t psize, uint32_t ipaddr){
+	int rounds;
+	size_t msize;
+	//unsigned char * ctxt;
+	unsigned char *lkey, ctxt;
 	Segment *rseg;
+	AES_KEY enkey;
+	
+	rounds = psize / 16;
+	if(rounds % 16 > 0) rounds++;
+	ctxt = calloc(rounds, AES_BLOCK_SIZE);
+	msize = rounds * AES_BLOCK_SIZE;
 
 	if((lkey = getkey(ipaddr)) == 0){ 
 	/* the error handling here is probably very useless */
 		if((lkey = addkey(ipaddr)) == NULL)
 			fprintf(stderr, "ERROR: addkey failed\n");
 	}
-
-	rseg = calloc(1, sizeof(*rseg));
 	AES_set_encrypt_key(lkey, 128, &enkey);
-
-	AES_encrypt(ptxt, (unsigned char *) &ctxt, &enkey);
+	
+	for(int i=0; rounds--;i+=16) {
+		for(int j=i; j-i < 16; j++) printf("%c", ptxt[j]);
+		AES_encrypt(&ptxt[i], &ctxt[i], &enkey);
+	}
+	
 	/* make the segment */
-	hnput(rseg->len, AES_BLOCK_SIZE, 2);
-	memcpy(rseg->msg, &ctxt, AES_BLOCK_SIZE);
+	rseg = calloc(1, sizeof(*rseg));
+	hnput(rseg->len, msize, 2);
+	memcpy(rseg->msg, &ctxt, msize);
 	hnput(rseg->code, Cryptd, 1);
 	return rseg;
 }
@@ -181,24 +192,31 @@ encmsg(unsigned char *ptxt, size_t tsize, uint32_t ipaddr){
 Segment *
 decmsg(unsigned char *ctxt, size_t tsize, uint32_t ipaddr) {
 	AES_KEY dekey;
-	unsigned char ptxt[AES_BLOCK_SIZE];
-	unsigned char *lkey;
+	//unsigned char *ptxt;
+	unsigned char *lkey, ptxt;
 	Segment *rseg;
-        
+
+	rounds = psize /16;
+	if(rounds % 16 > 0) rounds++;
+	ptxt= calloc(rounds, AES_BLOCK_SIZE);
+	msize = rounds*AES_BLOCK_SIZE;
+
 	if((lkey = getkey(ipaddr)) == 0){ 
 	/* the error handling here is probably very useless */
 		if((lkey = addkey(ipaddr)) == NULL)
 			fprintf(stderr, "ERROR: addkey failed\n");
 	}
-
-	rseg = calloc(1, sizeof(*rseg));
 	AES_set_decrypt_key(lkey, 128, &dekey);
 
-	AES_decrypt(ctxt, (unsigned char *) &ptxt, &dekey);
+	for(int i=0; rounds--; i+=16) {
+		AES_decrypt(&ctxt[i], &ptxt[i], &dekey);
+		for(int j=i; j-i < 16; j++) printf("%c", ptxt[j]);
+	}
 
 	/* make the segment */
-	hnput(rseg->len, AES_BLOCK_SIZE, 2);
-	memcpy(rseg->msg, &ptxt, AES_BLOCK_SIZE);
+	rseg = calloc(1, sizeof(*rseg));
+	hnput(rseg->len, msize, 2);
+	memcpy(rseg->msg, &ptxt, msize);
 	hnput(rseg->code, Decryptd, 1);
 	return rseg;
 }
@@ -224,7 +242,6 @@ SIGhandler(int ihavenofuckingideawhattodowiththis) {
 	_exit(0);
 }
 
-Segment seg;
 void
 test(void) {
 /*
@@ -254,7 +271,7 @@ run(int sock, uint32_t ipaddr) {
 	CHK_ERR(err, "ERROR: Hello packet");
 
 	/* keeping it a global until test func is no more needed */
-//dbg	Segment seg;
+	Segment seg;
 	Segment *rseg;
 
 	puts("---");
@@ -331,7 +348,8 @@ main(int argc, char* argv[]) {
 		inet_ntop(AF_INET, &(caddr.sin_addr), caddr_s, INET_ADDRSTRLEN);
 		printf("Connection from %s(%d), port %d\n", 
 				caddr_s, caddr.sin_addr.s_addr, ntohs(caddr.sin_port));
-
+		
+		/* what about writing/reading from file atsame time */
 		pid = fork();
 		CHK_ERR(pid, "ERROR on forking");
 		if(pid == 0) {
