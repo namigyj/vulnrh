@@ -102,7 +102,6 @@ addkey(uint32_t ipaddr) {
 //dbg	printf("km=%p\n",(void *)km, (void *)km+(sizeof (km[0])));
 	
 	km[nkm]->ip = ipaddr;
-	hnput(km[nkm]->key, ipaddr, 4);
 	memcpy(km[nkm]->key, masterkey, KEYLEN);
 
 	nkm++;
