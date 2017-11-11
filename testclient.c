@@ -21,6 +21,12 @@ enum {
 	Decrypt = 6,
 	Decryptd= 7,
 };
+/*utils{{{*/
+uint16_t
+nhgets(unsigned char c[2]){
+	return ((c[0]<<8) + c[1]) & 0xffff;
+}
+/*}}}*/
 
 /*test{{{*/
 void
@@ -87,7 +93,7 @@ main(int argc, char *argv[]) {
 	size_t dlen = strlen(msg);
 	//if (dlen > 15 ) { dlen = 15; msg[15]='\0'; }
 	buffer[0] = Crypt;
-	buffer[1] = 0x0; buffer[2] = 0x10;
+	buffer[1] = 0x0; buffer[2] = dlen;
 	strcpy(&buffer[3], msg);
 	err = write(sockfd, buffer, dlen+4);
 	CHK_ERR(err, "ERROR write: writing plaintext to socket");
@@ -101,12 +107,13 @@ main(int argc, char *argv[]) {
 	if(buffer[0] == Cryptd) printf("c: ");
 	for(int i=0;i<16;i++) printf("%hhx", buffer[i+3]);
 	printf(" ]\n");
-
+	
 	/* sending ciphertext */
 	printf("<=[ ");
 	buffer[0] = Decrypt;
-	buffer[1] = 0x0; buffer[2] = 0x10;
-	err =  write(sockfd, buffer, 16+4);
+	dlen = nhgets(&buffer[1]);
+	printf("(%ld)", dlen);
+	err =  write(sockfd, buffer, dlen+3);
 	CHK_ERR(err, "ERROR socket: writing cipher to socket");
 	for(int i=0;i<16;i++) printf("%hhx", buffer[i+3]);
 	printf(" ]\n");

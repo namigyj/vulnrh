@@ -156,15 +156,17 @@ encmsg(unsigned char *ptxt, size_t psize, uint32_t ipaddr){
 	int rounds;
 	size_t msize;
 	//unsigned char * ctxt;
-	unsigned char *lkey, ctxt;
+	unsigned char *lkey, *ctxt;
 	Segment *rseg;
 	AES_KEY enkey;
 	
 	rounds = psize / 16;
-	if(rounds % 16 > 0) rounds++;
+	if(psize % 16 > 0) rounds++;
 	ctxt = calloc(rounds, AES_BLOCK_SIZE);
 	msize = rounds * AES_BLOCK_SIZE;
-
+	/* debug */
+	printf("\n[debug]: rounds: %d, msize: %ld, psize %ld\n",
+			rounds, msize, psize);
 	if((lkey = getkey(ipaddr)) == 0){ 
 	/* the error handling here is probably very useless */
 		if((lkey = addkey(ipaddr)) == NULL)
@@ -173,14 +175,15 @@ encmsg(unsigned char *ptxt, size_t psize, uint32_t ipaddr){
 	AES_set_encrypt_key(lkey, 128, &enkey);
 	
 	for(int i=0; rounds--;i+=16) {
-		for(int j=i; j-i < 16; j++) printf("%c", ptxt[j]);
-		AES_encrypt(&ptxt[i], &ctxt[i], &enkey);
+		AES_encrypt(ptxt+i, ctxt+i, &enkey);
+		/* debug */
+		// for(int j=i; j-i < 16; j++) printf("%x", ptxt[j]);
 	}
 	
 	/* make the segment */
 	rseg = calloc(1, sizeof(*rseg));
 	hnput(rseg->len, msize, 2);
-	memcpy(rseg->msg, &ctxt, msize);
+	memcpy(rseg->msg, ctxt, msize);
 	hnput(rseg->code, Cryptd, 1);
 	return rseg;
 }
@@ -190,16 +193,21 @@ encmsg(unsigned char *ptxt, size_t psize, uint32_t ipaddr){
  *          I mean, what if the data isn't sent in the right order ?
  */
 Segment *
-decmsg(unsigned char *ctxt, size_t tsize, uint32_t ipaddr) {
+decmsg(unsigned char *ctxt, size_t psize, uint32_t ipaddr) {
 	AES_KEY dekey;
 	//unsigned char *ptxt;
-	unsigned char *lkey, ptxt;
+	size_t msize;
+	int rounds;
+	unsigned char *lkey, *ptxt;
 	Segment *rseg;
 
 	rounds = psize /16;
-	if(rounds % 16 > 0) rounds++;
+	if(psize % 16 > 0) rounds++;
 	ptxt= calloc(rounds, AES_BLOCK_SIZE);
 	msize = rounds*AES_BLOCK_SIZE;
+
+	printf("\n[debug]: rounds: %d, msize: %ld, psize %ld\n",
+			rounds, msize, psize);
 
 	if((lkey = getkey(ipaddr)) == 0){ 
 	/* the error handling here is probably very useless */
@@ -209,15 +217,17 @@ decmsg(unsigned char *ctxt, size_t tsize, uint32_t ipaddr) {
 	AES_set_decrypt_key(lkey, 128, &dekey);
 
 	for(int i=0; rounds--; i+=16) {
-		AES_decrypt(&ctxt[i], &ptxt[i], &dekey);
-		for(int j=i; j-i < 16; j++) printf("%c", ptxt[j]);
+		AES_decrypt(&ctxt[i], ptxt+i, &dekey);
+		/* debug */
+		// for(int j=i; j-i < 16; j++) printf("%hhx", ptxt+j);
 	}
 
 	/* make the segment */
 	rseg = calloc(1, sizeof(*rseg));
 	hnput(rseg->len, msize, 2);
-	memcpy(rseg->msg, &ptxt, msize);
+	memcpy(rseg->msg, ptxt, msize);
 	hnput(rseg->code, Decryptd, 1);
+	segdump(rseg);
 	return rseg;
 }
 
@@ -283,9 +293,9 @@ run(int sock, uint32_t ipaddr) {
 	read(sock, buf, 128);
 	dlen = nhgets(buf+1);
 	memcpy(&seg, buf, dlen+3);
-	printf("[debug]received : "); segdump(&seg);
+	printf("[debug]recv : "); segdump(&seg);
 
-	switch(buf[0]) {
+	switch((int)seg.code[0]) {
 	case Error:
 		/* in case the server has to handle errors on client */
 		printf("message with ERROR\n");
