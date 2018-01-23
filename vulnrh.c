@@ -107,10 +107,9 @@ addkey(uint32_t ipaddr) {
 	}
 	else
 		km = realloc(km, (nkm+1)*sizeof(Keymap *));
-	
-	km[nkm] = (Keymap *) malloc(sizeof(*km)); 
-//dbg	printf("km=%p\n",(void *)km, (void *)km+(sizeof (km[0])));
-	
+
+	/* very nasty bug : sizeof(*km) */
+	km[nkm] = (Keymap *) malloc(sizeof(Keymap));
 	km[nkm]->ip = ipaddr;
 
 	unsigned char nkey[KEYLEN];
