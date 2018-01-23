@@ -99,6 +99,7 @@ segdump(Segment *s) {
 /* todo : fix this. It creates a new key at each fork()
  *                  Do forks not share memory with eachother ?
  */
+/* Adds a key to the keymap and return it. */
 unsigned char *
 addkey(uint32_t ipaddr) {
 	if (nkm == 0){
@@ -138,6 +139,9 @@ loadkeys(void) {
 	return 0;
 }
 
+/* Return the key matching the ipaddr in Keymap.
+ * Return 0 if no key is found.
+ */
 unsigned char *
 getkey(uint32_t ipaddr) {
 	unsigned int i;
@@ -157,6 +161,7 @@ getkey(uint32_t ipaddr) {
 /* todo : make it cleaner by adding a code inside the data
  *        but not as ascii to avoid parsing
  */
+/* Make an error segment with an error message. */
 Segment *
 mkerr(const void *errmsg) {
 	Segment *rseg;
@@ -174,7 +179,9 @@ mkerr(const void *errmsg) {
 /* todo : check errors
  *        use something better than AES_encrypt
  *        use CBC
+ *        Refactor the encryption
  */
+/* Encrypts message and returns a segment with it. */
 Segment *
 encmsg(unsigned char *ptxt, size_t psize, uint32_t ipaddr){
 	AES_KEY enkey;
@@ -217,7 +224,9 @@ encmsg(unsigned char *ptxt, size_t psize, uint32_t ipaddr){
 /* todo : check errors
  *        Read a textbook to know how to decrypt in CBC mode on a HSM
  *          I mean, what if the data isn't sent in the right order ?
+ *        Refactor the decryption
  */
+/* Makes a segment with the message unencrypted passed. */
 Segment *
 decmsg(unsigned char *ctxt, size_t psize, uint32_t ipaddr) {
 	AES_KEY dekey;
@@ -264,7 +273,6 @@ segsend(int fd, void *buf, size_t count) {
 	return write(fd, sseg, nhgets(sseg->len)+3);
 }
 
-
 void
 freekm(void) {
 	puts("[debug][freekm]: freeing keymap");
@@ -279,6 +287,7 @@ SIGhandler(int ihavenofuckingideawhattodowiththis) {
 	_exit(0);
 }
 
+/* todo : don't forget to delete this */
 void
 test(void) {
 /*
@@ -351,6 +360,7 @@ run(int sock, uint32_t ipaddr) {
 	}
 }
 
+/* todo : Refactor the shit out of this function */
 int
 main(int argc, char* argv[]) {
 	int lsock, nsock; /* listen socket and new socket for client */
