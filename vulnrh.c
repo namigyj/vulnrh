@@ -49,7 +49,7 @@ size_t nkm;
 int nsock;
 FILE *file;
 
-static const unsigned char masterkey[] = {
+static const unsigned char testkey[] = {
 	0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 
 	0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F
 };
@@ -102,8 +102,16 @@ addkey(uint32_t ipaddr) {
 //dbg	printf("km=%p\n",(void *)km, (void *)km+(sizeof (km[0])));
 	
 	km[nkm]->ip = ipaddr;
-	memcpy(km[nkm]->key, masterkey, KEYLEN);
 
+	unsigned char nkey[KEYLEN];
+	FILE* fr = fopen("/dev/urandom", "r");
+	if (!fr) perror("cannot read urandom"), exit(EXIT_FAILURE);
+	fread(nkey, sizeof(char), KEYLEN, fr);
+	fclose(fr), fr = NULL;
+
+	/* testing */
+	// memcpy(km[nkm]->key, nkey, KEYLEN);
+	memcpy(km[nkm]->key, testkey, KEYLEN);
 	nkm++;
 	return km[nkm-1]->key;
 }
