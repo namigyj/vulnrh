@@ -3,3 +3,6 @@ vulnrh
 client
 peda*
 ?gdb*
+
+# emacs buffers
+\#*\#
