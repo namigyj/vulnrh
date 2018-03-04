@@ -1,12 +1,10 @@
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/queue.h>
 
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#include <openssl/ssl.h>
-#include <openssl/bio.h>
-#include <openssl/err.h>
 #include <openssl/aes.h>
 
 #include <stdlib.h>
@@ -38,14 +36,21 @@ enum {
     Decryptd= 7,
 };
 
-typedef struct keymap {
+/* ip key pair */
+struct ipkey {
     uint32_t ip;
     unsigned char key[KEYLEN];
-} Keymap;
+};
+typedef struct iknode {
+    struct ipkey ikpair;
+    struct iknode *next;
+} Iknode;
 
 /* GLOBALS */
-Keymap **km = NULL;
-size_t nkm;
+/* head & tail of the IP-Key pair linked list */
+Iknode *ikhd;
+Iknode *iktl;
+
 int nsock;
 FILE *file;
 
@@ -98,20 +103,18 @@ segdump(Segment *s) {
 /* todo : fix this. It creates a new key at each fork()
  *                  Do forks not share memory with eachother ?
  */
-/* Adds a key to the keymap and return it. */
+/* Adds a ip/key pair to the ik list and return the key. */
 unsigned char *
 addkey(uint32_t ipaddr) {
-    if (nkm == 0){
-        km = malloc(sizeof(Keymap *));
-        // printf("[debug][addkey]: created keymap at %p\n", (void*)km);
-    }
-    else
-        km = realloc(km, (nkm+1)*sizeof(Keymap *));
+    Iknode **next;
+    next = iktl ? &(iktl->next) : &ikhd;
 
-    /* very nasty bug : sizeof(*km) */
-    km[nkm] = (Keymap *) malloc(sizeof(Keymap));
-    km[nkm]->ip = ipaddr;
+    Iknode *new = malloc(sizeof(Iknode));
+    *next = new;
+    iktl = new;
 
+
+    new->ikpair.ip = ipaddr;
     unsigned char nkey[KEYLEN];
     FILE* fr = fopen("/dev/urandom", "r");
     if (!fr) perror("cannot read urandom"), exit(EXIT_FAILURE);
@@ -120,15 +123,13 @@ addkey(uint32_t ipaddr) {
 
     /* testing */
     // memcpy(km[nkm]->key, nkey, KEYLEN);
-    memcpy(km[nkm]->key, testkey, KEYLEN);
-    nkm++;
-
+    memcpy(new->ikpair.key, testkey, KEYLEN);
     /*
     printf("[debug][addkey]: key added:");
     printhex(km[nkm-1]->key, KEYLEN);
     printf(" at %p\n", (void*)km[nkm-1]);
     */
-    return km[nkm-1]->key;
+    return new->ikpair.key;
 }
 
 /* todo : loadkeys from file [see README]
@@ -143,17 +144,16 @@ loadkeys(void) {
  */
 unsigned char *
 getkey(uint32_t ipaddr) {
-    unsigned int i;
-
-    if ( km == NULL) {
+    if ( ikhd == NULL) {
         if(loadkeys() == 0) return 0;
     }
-    for(i=0; i<nkm; i++)
-        if(km[i]->ip == ipaddr)
-        return km[i]->key;
-        /*printf("[debug][getkey]: found key:");
-        printhex(km[i]->key, KEYLEN);
-        printf(" at %p\n", (void*)km[i]);*/
+    Iknode *cursor = ikhd;
+    while(cursor) {
+        if(cursor->ikpair.ip == ipaddr)
+            return cursor->ikpair.key;
+        cursor = cursor->next;
+    }
+
     return 0;
 }
 
@@ -273,16 +273,22 @@ segsend(int fd, void *buf, size_t count) {
 }
 
 void
-freekm(void) {
+disposekeys(void) {
     puts("[debug][freekm]: freeing keymap");
-    while(nkm--) free(km[nkm]);
+    Iknode *cursor = ikhd;
+    while(ikhd){
+        Iknode *tmp = cursor->next;
+        free(cursor);
+        cursor = tmp;
+    }
+
 }
 
 /* todo : read more on this. finally got it working but feels like cheaphack */
 void
 SIGhandler(int ihavenofuckingideawhattodowiththis) {
     close(nsock);
-    freekm();
+    disposekeys();
     _exit(0);
 }
 
@@ -363,54 +369,54 @@ run(int sock, uint32_t ipaddr) {
 /* TODO : Replace fork() by pthread */
 int
 main(int argc, char* argv[]) {
-	int lsock, nsock; /* listen socket and new socket for client */
-	struct sockaddr_in saddr;
-	int sport = 4545;
+    int lsock, nsock; /* listen socket and new socket for client */
+    struct sockaddr_in saddr;
+    int sport = 4545;
 
-	signal(SIGINT, SIGhandler);
+    signal(SIGINT, SIGhandler);
 
-	lsock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
-	CHK_ERR(lsock, "socket");
+    lsock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
+    CHK_ERR(lsock, "creating socket");
 
-	memset(&saddr, 0, sizeof(saddr));
-	saddr.sin_family = AF_INET;
-	saddr.sin_addr.s_addr = INADDR_ANY;
-	saddr.sin_port = htons(sport);
+    memset(&saddr, 0, sizeof(saddr));
+    saddr.sin_family = AF_INET;
+    saddr.sin_addr.s_addr = INADDR_ANY;
+    saddr.sin_port = htons(sport);
 
-	int err = bind(lsock, (struct sockaddr*) &saddr, sizeof(saddr));
-	CHK_ERR(err, "bind");
+    int err = bind(lsock, (struct sockaddr*) &saddr, sizeof(saddr));
+    CHK_ERR(err, "bind socket");
 
-	err = listen(lsock, 5);
-	CHK_ERR(err, "listen");
+    err = listen(lsock, 5);
+    CHK_ERR(err, "starting listening socket");
 
-	struct sockaddr_in caddr; /* client addr structure */
-	socklen_t caddrlen;
+    struct sockaddr_in caddr; /* client addr structure */
+    socklen_t caddrlen;
 
-	while(1) {
-		char caddr_s[INET_ADDRSTRLEN];
-		int pid;
+    while(1) {
+        char caddr_s[INET_ADDRSTRLEN];
+        int pid;
 
-		nsock = accept(lsock, (struct sockaddr*) &caddr, &caddrlen);
-		CHK_ERR(nsock, "ERROR on accepting new socket");
+        nsock = accept(lsock, (struct sockaddr*) &caddr, &caddrlen);
+        CHK_ERR(nsock, "ERROR on accepting new socket");
 
-		inet_ntop(AF_INET, &(caddr.sin_addr), caddr_s, INET_ADDRSTRLEN);
-		printf("Connection from %s(%d), port %d\n",
-				caddr_s, caddr.sin_addr.s_addr, ntohs(caddr.sin_port));
+        inet_ntop(AF_INET, &(caddr.sin_addr), caddr_s, INET_ADDRSTRLEN);
+        printf("Connection from %s(%d), port %d\n",
+                caddr_s, caddr.sin_addr.s_addr, ntohs(caddr.sin_port));
 
-		/* what about writing/reading from file atsame time */
-		pid = fork();
-		CHK_ERR(pid, "ERROR on forking");
-		if(pid == 0) {
-			close(lsock);
-			run(nsock, caddr.sin_addr.s_addr);
-			puts("[debug]fork : exiting normally...");
-			exit(0);
-		} else {
-			close(nsock);
-		}
-	}
-	puts("closing...\n");
-	freekm();
-	close(nsock);
-	return 0;
+        /* what about writing/reading from file atsame time */
+        pid = fork();
+        CHK_ERR(pid, "ERROR on forking");
+        if(pid == 0) {
+            close(lsock);
+            run(nsock, caddr.sin_addr.s_addr);
+            puts("[debug]fork : exiting normally...");
+            exit(0);
+        } else {
+            close(nsock);
+        }
+    }
+    puts("closing...\n");
+    disposekeys();
+    close(nsock);
+    return 0;
 }
