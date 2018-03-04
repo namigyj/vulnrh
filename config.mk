@@ -5,7 +5,7 @@ VERSION = 0.0
 LIBS = -lssl -lcrypto
 INCS = -I /usr/include/openssl
 
-# flags 
+# flags
 CFLAGS = -Wall -pedantic -DEBUG
 VCFLAGS = $(INCS) $(CFLAGS)
 VLFLAGS = $(LIBS)

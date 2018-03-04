@@ -11,7 +11,7 @@ OBJ = $(SRC:.c=.o)
 
 all: options vulnrh
 
-options: 
+options:
 	@echo vulnrh build options:
 	@echo "CFLAGS  = $(CFLAGS)"
 	@echo "LDFLAGS = $(VLFLAGS)"
@@ -19,10 +19,10 @@ options:
 
 vulnrh.o: vulnrh.c
 
-vulnrh: $(OBJ) 
+vulnrh: $(OBJ)
 	$(CC) $(VCFLAGS) -o $@ $(VLFLAGS) $^
 
-clean: 
+clean:
 	rm -f vulnrh $(OBJ)
 
 run: all
