@@ -12,11 +12,12 @@
 #include <stdio.h>
 #include <string.h>
 #include <signal.h>
+#include <pthread.h>
 
 #define KEYLEN 16
 
-#define CHK_ERR(err,s) if ((err)==1) { puts("ERROR "); perror(s); exit(1); }
-#define CHK_NULL(x) if ((x) == NULL) exit(1);
+#define CHK_ERR(err,s) if ((err)==1) { puts("ERROR "); perror(s); exit(EXIT_FAILURE); }
+#define CHK_NULL(x) if ((x) == NULL) exit(EXIT_FAILURE);
 
 void SIGhandler(int);
 
@@ -46,11 +47,17 @@ typedef struct iknode {
     struct iknode *next;
 } Iknode;
 
+typedef struct _thread_data_t {
+    int tid;
+    int nsock;
+    in_addr_t s_addr;
+} thread_data_t;
+
 /* GLOBALS */
 /* head & tail of the IP-Key pair linked list */
 Iknode *ikhd;
 Iknode *iktl;
-
+pthread_mutex_t lock_iklist;
 int nsock;
 FILE *file;
 
@@ -60,31 +67,26 @@ static const unsigned char testkey[] = {
 };
 
 
-void
-hnput(unsigned char *dst, uint32_t src, size_t n){
+void hnput(unsigned char *dst, uint32_t src, size_t n){
     size_t i;
 
 /* MSB in dst[0] */
     for(i=0; n--; i++)
         dst[i] = (src >> (n*8)) & 0xff;
 }
-uint16_t
-nhgets(unsigned char c[2]){
+uint16_t nhgets(unsigned char c[2]){
     return ((c[0]<<8) + c[1]) & 0xffff;
 }
-uint32_t
-nhgetl(unsigned char c[4]){
+uint32_t nhgetl(unsigned char c[4]){
     return (nhgets(c)<<16)+nhgets(c+2);
 }
 
 /* Debug */
-void
-printhex(unsigned char *txt, size_t len) {
+void printhex(unsigned char *txt, size_t len) {
     for(size_t i=0; i<len; i++)
         printf("%hhx", txt[i]);
 }
-void
-segdump(Segment *s) {
+void segdump(Segment *s) {
     char buf[130];
     memcpy(buf, s, sizeof(buf));
     uint8_t c = (uint8_t) *s->code;
@@ -104,15 +106,18 @@ segdump(Segment *s) {
  *                  Do forks not share memory with eachother ?
  */
 /* Adds a ip/key pair to the ik list and return the key. */
-unsigned char *
-addkey(uint32_t ipaddr) {
+unsigned char *addkey(uint32_t ipaddr) {
     Iknode **next;
     next = iktl ? &(iktl->next) : &ikhd;
-
     Iknode *new = malloc(sizeof(Iknode));
-    *next = new;
-    iktl = new;
 
+    /* [DJM] I think this is the only thing we should be worried about
+     * since we're working with a linked list : having these 2 interleaved.
+     */
+    pthread_mutex_lock(&lock_iklist);
+        *next = new;
+        iktl = new;
+    pthread_mutex_unlock(&lock_iklist);
 
     new->ikpair.ip = ipaddr;
     unsigned char nkey[KEYLEN];
@@ -134,16 +139,14 @@ addkey(uint32_t ipaddr) {
 
 /* todo : loadkeys from file [see README]
  */
-uint32_t
-loadkeys(void) {
+uint32_t loadkeys(void) {
     return 0;
 }
 
 /* Return the key matching the ipaddr in Keymap.
  * Return 0 if no key is found.
  */
-unsigned char *
-getkey(uint32_t ipaddr) {
+unsigned char *getkey(uint32_t ipaddr) {
     if ( ikhd == NULL) {
         if(loadkeys() == 0) return 0;
     }
@@ -161,8 +164,7 @@ getkey(uint32_t ipaddr) {
  *        but not as ascii to avoid parsing
  */
 /* Make an error segment with an error message. */
-Segment *
-mkerr(const void *errmsg) {
+Segment *mkerr(const void *errmsg) {
     Segment *rseg;
     size_t errlen;
 
@@ -178,11 +180,10 @@ mkerr(const void *errmsg) {
 /* todo : check errors
  *        use something better than AES_encrypt
  *        use CBC
- *        Refactor the encryption
+ *        Refactor
  */
 /* Encrypts message and returns a segment with it. */
-Segment *
-encmsg(unsigned char *ptxt, size_t psize, uint32_t ipaddr){
+Segment *encmsg(unsigned char *ptxt, size_t psize, uint32_t ipaddr){
     AES_KEY enkey;
     int rounds;
     size_t msize;
@@ -223,11 +224,10 @@ encmsg(unsigned char *ptxt, size_t psize, uint32_t ipaddr){
 /* todo : check errors
  *        Read a textbook to know how to decrypt in CBC mode on a HSM
  *          I mean, what if the data isn't sent in the right order ?
- *        Refactor the decryption
+ *        Refactor
  */
 /* Makes a segment with the message unencrypted passed. */
-Segment *
-decmsg(unsigned char *ctxt, size_t psize, uint32_t ipaddr) {
+Segment *decmsg(unsigned char *ctxt, size_t psize, uint32_t ipaddr) {
     AES_KEY dekey;
     int rounds;
     size_t msize;
@@ -265,15 +265,13 @@ decmsg(unsigned char *ctxt, size_t psize, uint32_t ipaddr) {
     return rseg;
 }
 
-ssize_t
-segsend(int fd, void *buf, size_t count) {
+ssize_t segsend(int fd, void *buf, size_t count) {
     Segment *sseg = buf;
     printf("[debug]sent : "); segdump(sseg);
     return write(fd, sseg, nhgets(sseg->len)+3);
 }
 
-void
-disposekeys(void) {
+void disposekeys(void) {
     puts("[debug][freekm]: freeing keymap");
     Iknode *cursor = ikhd;
     while(ikhd){
@@ -285,38 +283,25 @@ disposekeys(void) {
 }
 
 /* todo : read more on this. finally got it working but feels like cheaphack */
-void
-SIGhandler(int ihavenofuckingideawhattodowiththis) {
+void SIGhandler(int ihavenofuckingideawhattodowiththis) {
     close(nsock);
     disposekeys();
     _exit(0);
 }
 
 /* todo : don't forget to delete this */
-void
-test(void) {
-/*
-    addkey(0x42424242);
-    addkey(0x43434343);
-    printf("[0]:%d,%s\n[1]:%d,%s\n",
-        km[0]->ip, km[0]->key, km[1]->ip, km[1]->key);
-    freekm();
-*//*
-    memset(&seg, 0, sizeof(seg));
-    hnput(seg.code, Crypt, 1);
-    hnput(seg.len, AES_BLOCK_SIZE, 2);
-    strcpy((char *)seg.msg, "this is a test\0\0");
-*/
-    segdump(mkerr("02: testing this error"));
+void test(void) {
     exit(0);
-
 }
 
-void
-run(int sock, uint32_t ipaddr) {
+// todo : Refactor
+void *run(void *arg) {
     int err;
     unsigned char buf[128];
     size_t dlen;
+    thread_data_t *data = (thread_data_t *)arg;
+    int sock = data->nsock;
+    uint32_t ipaddr = data->s_addr;
 
     err = write(sock, "hello", strlen("hello"));
     CHK_ERR(err, "ERROR: Hello packet");
@@ -325,7 +310,6 @@ run(int sock, uint32_t ipaddr) {
     Segment seg;
     Segment *rseg;
 
-    puts("---");
     int n = 2;
     while(n--) {
 
@@ -340,11 +324,12 @@ run(int sock, uint32_t ipaddr) {
         case Error:
             /* in case the server has to handle errors on client */
             printf("message with ERROR\n");
-            return;
+
+            pthread_exit(NULL);
         case Message:
             /* in case control messages need to be sent/received */
-            printf("msg: %s\n", seg.msg);
-            return;
+
+            pthread_exit(NULL);
         case Crypt:
             rseg = encmsg(seg.msg, dlen, ipaddr);
             err = segsend(sock, rseg, nhgets(rseg->len)+3);
@@ -358,17 +343,19 @@ run(int sock, uint32_t ipaddr) {
         default:
             printf("[debug]unhandled code:%hhx\n", buf[0]);
             mkerr("01:request unknown");
-            return;
+
+            pthread_exit(NULL);
         }
 
         //free(rseg);
     }
+    puts("[debug]pthread : exiting normally...");
+    pthread_exit(NULL);
 }
 
 /* TODO : Refactor the shit out of this function */
 /* TODO : Replace fork() by pthread */
-int
-main(int argc, char* argv[]) {
+int main(int argc, char* argv[]) {
     int lsock, nsock; /* listen socket and new socket for client */
     struct sockaddr_in saddr;
     int sport = 4545;
@@ -376,7 +363,7 @@ main(int argc, char* argv[]) {
     signal(SIGINT, SIGhandler);
 
     lsock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
-    CHK_ERR(lsock, "creating socket");
+    CHK_ERR(lsock, "ERROR on creating socket");
 
     memset(&saddr, 0, sizeof(saddr));
     saddr.sin_family = AF_INET;
@@ -384,39 +371,41 @@ main(int argc, char* argv[]) {
     saddr.sin_port = htons(sport);
 
     int err = bind(lsock, (struct sockaddr*) &saddr, sizeof(saddr));
-    CHK_ERR(err, "bind socket");
+    CHK_ERR(err, "ERROR cannot bind socket");
 
     err = listen(lsock, 5);
     CHK_ERR(err, "starting listening socket");
 
     struct sockaddr_in caddr; /* client addr structure */
     socklen_t caddrlen;
+    pthread_mutex_init(&lock_iklist, NULL);
 
     while(1) {
         char caddr_s[INET_ADDRSTRLEN];
-        int pid;
+        int pcnt = 0;
 
         nsock = accept(lsock, (struct sockaddr*) &caddr, &caddrlen);
         CHK_ERR(nsock, "ERROR on accepting new socket");
 
         inet_ntop(AF_INET, &(caddr.sin_addr), caddr_s, INET_ADDRSTRLEN);
-        printf("Connection from %s(%d), port %d\n",
-                caddr_s, caddr.sin_addr.s_addr, ntohs(caddr.sin_port));
+        printf("\n---\nConnection from %s : %d\n",
+                caddr_s, ntohs(caddr.sin_port));
 
-        /* what about writing/reading from file atsame time */
-        pid = fork();
-        CHK_ERR(pid, "ERROR on forking");
-        if(pid == 0) {
-            close(lsock);
-            run(nsock, caddr.sin_addr.s_addr);
-            puts("[debug]fork : exiting normally...");
-            exit(0);
-        } else {
+        pthread_t thr;
+        thread_data_t thr_data;
+        thr_data.s_addr = caddr.sin_addr.s_addr;
+        thr_data.nsock = nsock;
+        thr_data.tid = pcnt++;
+        int errno;
+        if((errno = pthread_create(&thr, NULL, run, &thr_data))) {
+            fprintf(stderr, "error: creating new thread, errno: %d\n", errno);
             close(nsock);
         }
+
     }
     puts("closing...\n");
     disposekeys();
     close(nsock);
-    return 0;
+    return EXIT_SUCCESS;
 }
+/* randu.org/tutorials/threads/ */
