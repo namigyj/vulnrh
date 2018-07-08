@@ -6,7 +6,7 @@
 
 include config.mk
 
-SRC = vulnrh.c
+SRC = src/vulnrh.c
 OBJ = $(SRC:.c=.o)
 
 all: options vulnrh
@@ -20,15 +20,16 @@ options:
 vulnrh.o: vulnrh.c
 
 vulnrh: $(OBJ)
-	$(CC) $(VCFLAGS) -o $@ $(VLFLAGS) $^
+	$(CC) $(VCFLAGS) -o bin/$@ $(VLFLAGS) $^
 
 clean:
-	rm -f vulnrh $(OBJ)
+	rm -f bin/vulnrh $(OBJ)
+	rm -f bin/client src/testclient.o
 
 run: all
-	./vulnrh
+	./bin/vulnrh
 
 testclient.o: testclient.c
 
-client: testclient.o
-	$(CC) -o $@ testclient.c
+client: src/testclient.o
+	$(CC) -o bin/$@ src/testclient.c
